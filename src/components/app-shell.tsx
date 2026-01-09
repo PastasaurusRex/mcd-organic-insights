@@ -54,7 +54,7 @@ export const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) 
                             2025 Organic Insights | Cossette × McDonald's
                         </div>
                         <a
-                            href="https://github.com/parthshahanand/csv-dash"
+                            href="https://github.com/parthshahanand/mcd-organic-insights"
                             target="_blank"
                             rel="noopener noreferrer"
                             className="flex items-center justify-center w-10 h-10 rounded-full bg-foreground text-background hover:scale-105 hover:shadow-lg transition-all"
