@@ -8,6 +8,7 @@
   Built with Next.js 16 • React 19 • Tailwind CSS • Recharts
 </p>
 
+### [mcd2025.vercel.app](https://mcd2025.vercel.app/)
 ---
 
 ## 📊 Overview
