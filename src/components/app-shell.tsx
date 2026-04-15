@@ -3,16 +3,20 @@
 import React from 'react';
 import { HugeiconsIcon } from '@hugeicons/react';
 import { Search01Icon, Cancel01Icon, GithubIcon } from '@hugeicons/core-free-icons';
+import { usePathname } from 'next/navigation';
 import { useData } from '@/lib/data-context';
 import { Input } from '@/components/ui/input';
 
 export const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     const { filters, setFilters } = useData();
+    const pathname = usePathname();
+    const isAdmin = pathname === '/admin';
 
     return (
         <div className="flex min-h-screen bg-background text-foreground">
             <main className="flex-1 flex flex-col min-w-0">
-                <header className="h-20 border-b border-border flex items-center px-8 bg-background/80 backdrop-blur-md sticky top-0 z-40">
+                {!isAdmin && (
+                    <header className="h-20 border-b border-border flex items-center px-8 bg-background/80 backdrop-blur-md sticky top-0 z-40">
                     {/* Left: Logo */}
                     <div className="flex-1 flex justify-start">
                         <div className="flex items-center gap-2">
@@ -63,7 +67,8 @@ export const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) 
                         </a>
                     </div>
                 </header>
-                <div className="p-8 pb-16 max-w-[1600px] mx-auto w-full">
+                )}
+                <div className={isAdmin ? "h-screen w-full overflow-hidden" : "p-8 pb-16 max-w-[1600px] mx-auto w-full"}>
                     {children}
                 </div>
             </main>

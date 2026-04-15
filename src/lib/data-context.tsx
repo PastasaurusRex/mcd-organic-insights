@@ -1,8 +1,8 @@
 'use client';
 
 import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
-import { Post, Filters, DashboardStats } from '@/types/post';
-import { fetchAndParseData } from '@/lib/csv-parser';
+import { Post, Filters, DashboardStats, Network, PostType, Language } from '@/types/post';
+import { supabase } from '@/lib/supabase';
 import dayjs from 'dayjs';
 
 interface DataContextType {
@@ -16,6 +16,24 @@ interface DataContextType {
     allPlacements: string[];
     isLoading: boolean;
     error: string | null;
+}
+
+interface PostDBRow {
+    id: string;
+    network: string;
+    published_at: string;
+    post_type: string;
+    placement: string;
+    text: string;
+    url: string;
+    impressions: number;
+    reach: number | null;
+    engagement_rate: number;
+    shares: number;
+    share_ratio: number;
+    engagements: number;
+    language: string;
+    tags: string[] | null;
 }
 
 export const BOOSTED_POST_IDS = ['7490691524334816517'];
@@ -39,15 +57,54 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     });
 
     useEffect(() => {
-        fetchAndParseData()
-            .then((data) => {
-                setPosts(data);
-                setIsLoading(false);
-            })
-            .catch((err) => {
-                setError(err.message || 'Failed to load social media data');
-                setIsLoading(false);
-            });
+        const loadPosts = async () => {
+            let allData: PostDBRow[] = [];
+            let from = 0;
+            const PAGE_SIZE = 1000;
+            let hasMore = true;
+
+            while (hasMore) {
+                const { data, error } = await supabase
+                    .from('posts')
+                    .select('*')
+                    .range(from, from + PAGE_SIZE - 1);
+                
+                if (error) throw error;
+                if (data && data.length > 0) {
+                    allData = [...allData, ...(data as PostDBRow[])];
+                    if (data.length < PAGE_SIZE) hasMore = false;
+                    else from += PAGE_SIZE;
+                } else {
+                    hasMore = false;
+                }
+            }
+            
+            const formattedData = allData.map((row): Post => ({
+                id: row.id,
+                network: row.network as Network,
+                publishedAt: dayjs(row.published_at).toDate(),
+                postType: row.post_type as PostType,
+                placement: row.placement,
+                text: row.text,
+                url: row.url,
+                impressions: Number(row.impressions),
+                reach: row.reach !== null ? Number(row.reach) : null,
+                engagementRate: Number(row.engagement_rate),
+                shares: Number(row.shares),
+                shareRatio: Number(row.share_ratio),
+                engagements: Number(row.engagements),
+                language: row.language as Language,
+                tags: row.tags || []
+            }));
+            
+            setPosts(formattedData);
+            setIsLoading(false);
+        };
+
+        loadPosts().catch((err) => {
+            setError(err.message || 'Failed to load social media data');
+            setIsLoading(false);
+        });
     }, []);
 
     const allTags = useMemo(() => {
