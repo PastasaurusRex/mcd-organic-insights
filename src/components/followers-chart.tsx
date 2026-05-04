@@ -12,7 +12,6 @@ import {
     Tooltip,
     ResponsiveContainer,
 } from 'recharts';
-import Papa from 'papaparse';
 import dayjs from 'dayjs';
 import { HugeiconsIcon } from '@hugeicons/react';
 import { UserGroupIcon } from '@hugeicons/core-free-icons';
@@ -31,6 +30,17 @@ const CSV_PREFIX: Record<Platform, string> = {
     TIKTOK: 'TT',
     X: 'X',
 };
+
+interface FollowerDBRow {
+    date: string;
+    fb: number;
+    ig_en: number;
+    ig_fr: number;
+    tt_en: number;
+    tt_fr: number;
+    x_en: number;
+    x_fr: number;
+}
 
 interface RawFollowerRow {
     Date: string;
@@ -55,22 +65,54 @@ export const FollowersChart: React.FC = () => {
     const [isLoading, setIsLoading] = useState(true);
 
     useEffect(() => {
-        fetch('/mcd-followers.csv')
-            .then(res => res.text())
-            .then(csv => {
-                const result = Papa.parse<RawFollowerRow>(csv, { header: true, skipEmptyLines: true });
-                // Exclude December 2024 data
-                const filteredData = result.data.filter(row => {
-                    const d = dayjs(row.Date);
-                    return !(d.month() === 11 && d.year() === 2024);
-                });
-                setRawData(filteredData);
-                setIsLoading(false);
-            })
-            .catch(err => {
-                console.error('Failed to load followers data:', err);
-                setIsLoading(false);
+        const loadFollowers = async () => {
+            const { supabase } = await import('@/lib/supabase');
+            
+            let allData: FollowerDBRow[] = [];
+            let from = 0;
+            const PAGE_SIZE = 1000;
+            let hasMore = true;
+
+            while (hasMore) {
+                const { data, error } = await supabase
+                    .from('followers_history')
+                    .select('*')
+                    .range(from, from + PAGE_SIZE - 1);
+                
+                if (error) throw error;
+                if (data && data.length > 0) {
+                    allData = [...allData, ...(data as FollowerDBRow[])];
+                    if (data.length < PAGE_SIZE) hasMore = false;
+                    else from += PAGE_SIZE;
+                } else {
+                    hasMore = false;
+                }
+            }
+
+            const mappedData: RawFollowerRow[] = allData.map((row) => ({
+                Date: row.date,
+                'FB followers': String(row.fb),
+                'IGEN followers': String(row.ig_en),
+                'IGFR followers': String(row.ig_fr),
+                'TTEN followers': String(row.tt_en),
+                'TTFR followers': String(row.tt_fr),
+                'XEN followers': String(row.x_en),
+                'XFR followers': String(row.x_fr),
+            }));
+
+            // Exclude December 2024 data
+            const filteredData = mappedData.filter(row => {
+                const d = dayjs(row.Date);
+                return !(d.month() === 11 && d.year() === 2024);
             });
+            setRawData(filteredData);
+            setIsLoading(false);
+        };
+        
+        loadFollowers().catch(err => {
+            console.error('Failed to load followers data:', err);
+            setIsLoading(false);
+        });
     }, []);
 
     const isFacebookOnly = selectedPlatform === 'FACEBOOK';

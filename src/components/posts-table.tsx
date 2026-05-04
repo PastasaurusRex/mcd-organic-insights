@@ -29,13 +29,48 @@ import {
     Sorting01Icon,
     ArrowLeft01Icon,
     ArrowRight01Icon,
-    LinkSquare02Icon
+    LinkSquare02Icon,
+    Cancel01Icon
 } from '@hugeicons/core-free-icons';
 import dayjs from 'dayjs';
 
+interface SortConfig {
+    key: keyof Post;
+    direction: 'asc' | 'desc';
+}
+
+function percentileRank(data: Post[], columnKey: keyof Post) {
+    const sorted = [...data].sort((a, b) => {
+        const aVal = a[columnKey];
+        const bVal = b[columnKey];
+        if (aVal === null) return -1;
+        if (bVal === null) return 1;
+        return (aVal ?? 0) > (bVal ?? 0) ? 1 : (aVal ?? 0) < (bVal ?? 0) ? -1 : 0;
+    });
+    const totalRows = sorted.length;
+    const rankMap = new Map<string, number>();
+
+    let i = 0;
+    while (i < totalRows) {
+        let j = i;
+        // find the end of the tie group
+        while (j < totalRows && sorted[j][columnKey] === sorted[i][columnKey]) {
+            j++;
+        }
+        // average rank for the tie group
+        const avgRank = (i + j + 1) / 2; // +1 because ranks are 1-based
+        for (let k = i; k < j; k++) {
+            rankMap.set(sorted[k].id, avgRank / totalRows);
+        }
+        i = j;
+    }
+
+    return rankMap;
+}
+
 export const PostsTable: React.FC = () => {
     const { filteredPosts } = useData();
-    const [sortConfig, setSortConfig] = useState<{ key: keyof Post; direction: 'asc' | 'desc' } | null>(null);
+    const [sortConfigs, setSortConfigs] = useState<SortConfig[]>([]);
     const [currentPage, setCurrentPage] = useState(1);
     const [itemsPerPage, setItemsPerPage] = useState(10);
 
@@ -45,35 +80,84 @@ export const PostsTable: React.FC = () => {
         setCurrentPage(1);
     }, [filteredPosts, itemsPerPage]);
 
-    const handleSort = (key: keyof Post) => {
-        let direction: 'asc' | 'desc' = 'asc';
-        if (sortConfig && sortConfig.key === key && sortConfig.direction === 'asc') {
-            direction = 'desc';
-        }
-        setSortConfig({ key, direction });
+    const handleSort = (e: React.MouseEvent, key: keyof Post) => {
+        const isShift = e.shiftKey;
+        setSortConfigs((prev) => {
+            const existingIndex = prev.findIndex(c => c.key === key);
+            if (isShift) {
+                if (existingIndex >= 0) {
+                    const config = prev[existingIndex];
+                    if (config.direction === 'desc') {
+                        const newConfigs = [...prev];
+                        newConfigs[existingIndex] = { ...config, direction: 'asc' };
+                        return newConfigs;
+                    } else {
+                        return prev.filter(c => c.key !== key);
+                    }
+                } else {
+                    return [...prev, { key, direction: 'desc' }];
+                }
+            } else {
+                if (existingIndex >= 0 && prev.length === 1) {
+                    return [{ key, direction: prev[0].direction === 'desc' ? 'asc' : 'desc' }];
+                }
+                return [{ key, direction: 'desc' }];
+            }
+        });
     };
+
+    // calculate Percentile Ranks when configs change (specifically the keys added/removed)
+    const rankMaps = useMemo(() => {
+        if (sortConfigs.length <= 1) return new Map();
+        const map = new Map<keyof Post, Map<string, number>>();
+        for (const config of sortConfigs) {
+            // Only numeric columns should theoretically be composite sorted, but this works generally
+            map.set(config.key, percentileRank(filteredPosts, config.key));
+        }
+        return map;
+    }, [filteredPosts, sortConfigs]);
 
     const sortedPosts = useMemo(() => {
         const sortableItems = [...filteredPosts];
-        if (sortConfig !== null) {
+        if (sortConfigs.length === 0) return sortableItems;
+
+        if (sortConfigs.length === 1) {
+            const config = sortConfigs[0];
             sortableItems.sort((a, b) => {
-                const aVal = a[sortConfig.key];
-                const bVal = b[sortConfig.key];
+                const aVal = a[config.key];
+                const bVal = b[config.key];
 
-                if (aVal === null) return 1;
-                if (bVal === null) return -1;
+                if (aVal === null) return config.direction === 'asc' ? -1 : 1;
+                if (bVal === null) return config.direction === 'asc' ? 1 : -1;
 
-                if (aVal < bVal) {
-                    return sortConfig.direction === 'asc' ? -1 : 1;
-                }
-                if (aVal > bVal) {
-                    return sortConfig.direction === 'asc' ? 1 : -1;
-                }
+                if (aVal < bVal) return config.direction === 'asc' ? -1 : 1;
+                if (aVal > bVal) return config.direction === 'asc' ? 1 : -1;
                 return 0;
             });
+            return sortableItems;
         }
+
+        // Composite scoring sorting
+        sortableItems.sort((a, b) => {
+            let scoreA = 0;
+            let scoreB = 0;
+
+            for (const config of sortConfigs) {
+                const rankMap = rankMaps.get(config.key);
+                if (rankMap) {
+                    const isAsc = config.direction === 'asc';
+                    const rA = rankMap.get(a.id) || 0;
+                    const rB = rankMap.get(b.id) || 0;
+                    scoreA += isAsc ? (1 - rA) : rA;
+                    scoreB += isAsc ? (1 - rB) : rB;
+                }
+            }
+
+            return scoreB - scoreA; // descending by the composite score
+        });
+
         return sortableItems;
-    }, [filteredPosts, sortConfig]);
+    }, [filteredPosts, sortConfigs, rankMaps]);
 
     const paginatedPosts = useMemo(() => {
         const startIndex = (currentPage - 1) * itemsPerPage;
@@ -92,13 +176,41 @@ export const PostsTable: React.FC = () => {
         }
     };
 
+    const getSortIcon = (key: keyof Post) => {
+        const index = sortConfigs.findIndex(c => c.key === key);
+        if (index === -1) return <HugeiconsIcon icon={Sorting01Icon} size={12} className="ml-1 inline opacity-40 duration-200 transition-all" />;
+        const config = sortConfigs[index];
+        return (
+            <span className="inline-flex items-center ml-1 align-middle gap-1 pb-0.5">
+                {sortConfigs.length > 1 && (
+                    <span className="bg-primary text-primary-foreground rounded-full w-3.5 h-3.5 text-[8px] flex items-center justify-center -mr-0.5 mt-0.5">
+                        {index + 1}
+                    </span>
+                )}
+                <HugeiconsIcon icon={Sorting01Icon} size={12} className={`opacity-100 mt-0.5 ${config.direction === 'asc' ? '-scale-y-100' : ''}`} />
+            </span>
+        );
+    };
+
     return (
         <div className="space-y-6 animate-in" style={{ animationDelay: '800ms' }}>
             <div className="flex items-center justify-between">
                 <div className="space-y-1">
                     <h3 className="text-xl font-bold tracking-tight">Content Inventory</h3>
-                    <p className="text-[10px] text-muted-foreground font-bold uppercase tracking-widest">
+                    <p className="flex items-center text-[10px] text-muted-foreground font-bold uppercase tracking-widest leading-none">
                         Analysis of individual post performance
+                        {sortConfigs.length > 1 && (
+                            <Badge variant="secondary" className="ml-2 text-[8px] bg-primary/10 text-primary uppercase h-4 px-1.5 border-none flex items-center gap-1.5 hover:bg-primary/20 transition-colors cursor-default pr-1 pt-0.5">
+                                Composite Sort Active
+                                <button
+                                    onClick={() => setSortConfigs([])}
+                                    className="hover:scale-125 transition-transform p-0.5 -mr-0.5 bg-primary/20 rounded-sm hover:bg-primary/40 hover:text-foreground"
+                                    title="Clear All Sorting"
+                                >
+                                    <HugeiconsIcon icon={Cancel01Icon} size={10} />
+                                </button>
+                            </Badge>
+                        )}
                     </p>
                 </div>
                 <div className="flex items-center gap-3">
@@ -121,25 +233,25 @@ export const PostsTable: React.FC = () => {
                 <div className="overflow-x-auto scrollbar-thin scrollbar-thumb-border/40">
                     <Table>
                         <TableHeader>
-                            <TableRow className="bg-muted/30 hover:bg-muted/30 border-b border-border/40">
+                            <TableRow className="bg-muted/30 hover:bg-muted/30 border-b border-border/40 select-none">
                                 <TableHead className="w-[60px] pl-6 text-[10px] font-bold uppercase tracking-[0.1em] text-muted-foreground/80">Platform</TableHead>
-                                <TableHead onClick={() => handleSort('publishedAt')} className="w-[100px] cursor-pointer hover:text-primary transition-colors text-[10px] font-bold uppercase tracking-[0.1em] text-muted-foreground/80 whitespace-nowrap" aria-label={`Sort by date ${sortConfig?.key === 'publishedAt' ? (sortConfig.direction === 'asc' ? 'descending' : 'ascending') : ''}`}>
-                                    Date <HugeiconsIcon icon={Sorting01Icon} size={12} className="ml-1 inline opacity-40" />
+                                <TableHead onClick={(e) => handleSort(e, 'publishedAt')} className="w-[100px] cursor-pointer hover:text-primary transition-colors text-[10px] font-bold uppercase tracking-[0.1em] text-muted-foreground/80 whitespace-nowrap">
+                                    Date {getSortIcon('publishedAt')}
                                 </TableHead>
                                 <TableHead className="min-w-[300px] max-w-md text-[10px] font-bold uppercase tracking-[0.1em] text-muted-foreground/80">Caption</TableHead>
                                 <TableHead className="w-[80px] text-[10px] font-bold uppercase tracking-[0.1em] text-muted-foreground/80">URL</TableHead>
                                 <TableHead className="w-[90px] text-center text-[10px] font-bold uppercase tracking-[0.1em] text-muted-foreground/80">Type</TableHead>
-                                <TableHead onClick={() => handleSort('impressions')} className="w-[100px] cursor-pointer hover:text-primary text-right whitespace-nowrap text-[10px] font-bold uppercase tracking-[0.1em] text-muted-foreground/80" aria-label={`Sort by impressions ${sortConfig?.key === 'impressions' ? (sortConfig.direction === 'asc' ? 'descending' : 'ascending') : ''}`}>
-                                    Impr. <HugeiconsIcon icon={Sorting01Icon} size={12} className="ml-1 inline opacity-40" />
+                                <TableHead onClick={(e) => handleSort(e, 'impressions')} className="w-[100px] cursor-pointer hover:text-primary text-right whitespace-nowrap text-[10px] font-bold uppercase tracking-[0.1em] text-muted-foreground/80">
+                                    Impr. {getSortIcon('impressions')}
                                 </TableHead>
-                                <TableHead onClick={() => handleSort('engagements')} className="w-[100px] cursor-pointer hover:text-primary text-right whitespace-nowrap text-[10px] font-bold uppercase tracking-[0.1em] text-muted-foreground/80" aria-label={`Sort by engagements ${sortConfig?.key === 'engagements' ? (sortConfig.direction === 'asc' ? 'descending' : 'ascending') : ''}`}>
-                                    Eng. <HugeiconsIcon icon={Sorting01Icon} size={12} className="ml-1 inline opacity-40" />
+                                <TableHead onClick={(e) => handleSort(e, 'engagements')} className="w-[100px] cursor-pointer hover:text-primary text-right whitespace-nowrap text-[10px] font-bold uppercase tracking-[0.1em] text-muted-foreground/80">
+                                    Eng. {getSortIcon('engagements')}
                                 </TableHead>
-                                <TableHead onClick={() => handleSort('engagementRate')} className="w-[80px] cursor-pointer hover:text-primary text-right whitespace-nowrap text-[10px] font-bold uppercase tracking-[0.1em] text-muted-foreground/80" aria-label={`Sort by engagement rate ${sortConfig?.key === 'engagementRate' ? (sortConfig.direction === 'asc' ? 'descending' : 'ascending') : ''}`}>
-                                    ER% <HugeiconsIcon icon={Sorting01Icon} size={12} className="ml-1 inline opacity-40" />
+                                <TableHead onClick={(e) => handleSort(e, 'engagementRate')} className="w-[80px] cursor-pointer hover:text-primary text-right whitespace-nowrap text-[10px] font-bold uppercase tracking-[0.1em] text-muted-foreground/80">
+                                    ER% {getSortIcon('engagementRate')}
                                 </TableHead>
-                                <TableHead onClick={() => handleSort('shareRatio')} className="w-[80px] cursor-pointer hover:text-primary text-right whitespace-nowrap text-[10px] font-bold uppercase tracking-[0.1em] text-muted-foreground/80 pr-6" aria-label={`Sort by share ratio ${sortConfig?.key === 'shareRatio' ? (sortConfig.direction === 'asc' ? 'descending' : 'ascending') : ''}`}>
-                                    Share% <HugeiconsIcon icon={Sorting01Icon} size={12} className="ml-1 inline opacity-40" />
+                                <TableHead onClick={(e) => handleSort(e, 'shareRatio')} className="w-[90px] cursor-pointer hover:text-primary text-right whitespace-nowrap text-[10px] font-bold uppercase tracking-[0.1em] text-muted-foreground/80 pr-6">
+                                    Share% {getSortIcon('shareRatio')}
                                 </TableHead>
                             </TableRow>
                         </TableHeader>
@@ -218,7 +330,6 @@ export const PostsTable: React.FC = () => {
                         onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
                         disabled={currentPage === 1}
                         className="h-8 px-4 font-bold text-[10px] uppercase tracking-widest border-border/50 bg-muted/20 hover:bg-primary hover:text-primary-foreground transition-all shadow-none"
-                        aria-label="Previous page"
                     >
                         <HugeiconsIcon icon={ArrowLeft01Icon} size={12} className="mr-1.5" /> Previous
                     </Button>
@@ -228,7 +339,6 @@ export const PostsTable: React.FC = () => {
                         onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
                         disabled={currentPage === totalPages}
                         className="h-8 px-4 font-bold text-[10px] uppercase tracking-widest border-border/50 bg-muted/20 hover:bg-primary hover:text-primary-foreground transition-all shadow-none"
-                        aria-label="Next page"
                     >
                         Next <HugeiconsIcon icon={ArrowRight01Icon} size={12} className="ml-1.5" />
                     </Button>
