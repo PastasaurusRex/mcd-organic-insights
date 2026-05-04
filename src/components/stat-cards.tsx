@@ -17,10 +17,9 @@ import {
     TiktokIcon,
     NewTwitterIcon
 } from '@hugeicons/core-free-icons';
-import Papa from 'papaparse';
 import dayjs from 'dayjs';
 
-interface FollowerCSVRow {
+interface FollowerRow {
     Date: string;
     'FB followers': string;
     'IGEN followers': string;
@@ -31,37 +30,87 @@ interface FollowerCSVRow {
     'XFR followers': string;
 }
 
+interface FollowerDBRow {
+    date: string;
+    fb: number;
+    ig_en: number;
+    ig_fr: number;
+    tt_en: number;
+    tt_fr: number;
+    x_en: number;
+    x_fr: number;
+}
+
 export const StatCards: React.FC = () => {
     const { stats, filters } = useData();
-    const [followerData, setFollowerData] = useState<FollowerCSVRow[]>([]);
+    const [followerData, setFollowerData] = useState<FollowerRow[]>([]);
 
     useEffect(() => {
-        fetch('/mcd-followers.csv')
-            .then(res => res.text())
-            .then(csv => {
-                const result = Papa.parse<FollowerCSVRow>(csv, { header: true, skipEmptyLines: true });
-                // Exclude December 2024 data
-                const filteredData = result.data.filter(row => {
-                    const d = dayjs(row.Date);
-                    return !(d.month() === 11 && d.year() === 2024);
-                });
-                setFollowerData(filteredData);
+        const loadFollowers = async () => {
+            const { supabase } = await import('@/lib/supabase');
+
+            let allData: FollowerDBRow[] = [];
+            let from = 0;
+            const PAGE_SIZE = 1000;
+            let hasMore = true;
+
+            while (hasMore) {
+                const { data, error } = await supabase
+                    .from('followers_history')
+                    .select('*')
+                    .range(from, from + PAGE_SIZE - 1);
+
+                if (error) throw error;
+                if (data && data.length > 0) {
+                    allData = [...allData, ...(data as FollowerDBRow[])];
+                    if (data.length < PAGE_SIZE) hasMore = false;
+                    else from += PAGE_SIZE;
+                } else {
+                    hasMore = false;
+                }
+            }
+
+            const mappedData: FollowerRow[] = allData.map((row) => ({
+                Date: row.date,
+                'FB followers': String(row.fb),
+                'IGEN followers': String(row.ig_en),
+                'IGFR followers': String(row.ig_fr),
+                'TTEN followers': String(row.tt_en),
+                'TTFR followers': String(row.tt_fr),
+                'XEN followers': String(row.x_en),
+                'XFR followers': String(row.x_fr),
+            }));
+
+            // Exclude December 2024 data
+            const filteredData = mappedData.filter(row => {
+                const d = dayjs(row.Date);
+                return !(d.month() === 11 && d.year() === 2024);
             });
+            setFollowerData(filteredData);
+        };
+
+        loadFollowers().catch(err => {
+            console.error('Failed to load followers data:', err);
+        });
     }, []);
 
     const followerStats = useMemo(() => {
         if (followerData.length === 0) return { value: 0, label: '...', icon: UserGroupIcon };
 
-        // Determine which month to show (most recent by default, or selected)
-        let targetRow;
-        if (filters.selectedMonths.length === 1) {
-            targetRow = followerData.find(row => dayjs(row.Date).format('MMMM') === filters.selectedMonths[0]);
+        // Sort by date ascending so the last element is the most recent
+        const sorted = [...followerData].sort((a, b) => dayjs(a.Date).valueOf() - dayjs(b.Date).valueOf());
+
+        // Filter candidates by selected years and months
+        let candidates = sorted;
+        if (filters.selectedYears.length > 0) {
+            candidates = candidates.filter(row => filters.selectedYears.includes(dayjs(row.Date).format('YYYY')));
+        }
+        if (filters.selectedMonths.length > 0) {
+            candidates = candidates.filter(row => filters.selectedMonths.includes(dayjs(row.Date).format('MMMM')));
         }
 
-        // Default to most recent month if no single month selected
-        if (!targetRow) {
-            targetRow = followerData[followerData.length - 1];
-        }
+        // Pick the most recent matching row, or fall back to the most recent overall
+        const targetRow = candidates.length > 0 ? candidates[candidates.length - 1] : sorted[sorted.length - 1];
 
         if (!targetRow) return { value: 0, label: '...', icon: UserGroupIcon };
 
@@ -95,7 +144,7 @@ export const StatCards: React.FC = () => {
         }
 
         return { value: total, label: `as of ${monthLabel}`, icon };
-    }, [followerData, filters.selectedMonths, filters.networks]);
+    }, [followerData, filters.selectedMonths, filters.selectedYears, filters.networks]);
 
     const cards = [
         {
